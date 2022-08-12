@@ -32,6 +32,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/choria-io/fisk"
+	"github.com/choria-io/goform"
 	"github.com/dustin/go-humanize"
 	"github.com/emicklei/dot"
 	"github.com/google/go-cmp/cmp"
@@ -110,6 +111,7 @@ type streamCmd struct {
 	fCreated   time.Duration
 	fConsumers int
 	fInvert    bool
+	reportFile string
 
 	listNames    bool
 	vwStartId    int
@@ -169,7 +171,11 @@ func configureStreamCommand(app commandHost) {
 		f.Flag("deny-delete", "Deny messages from being deleted via the API").IsSetByUser(&c.denyDeleteSet).BoolVar(&c.denyDelete)
 		f.Flag("deny-purge", "Deny entire stream or subject purges via the API").IsSetByUser(&c.denyPurgeSet).BoolVar(&c.denyPurge)
 		f.Flag("allow-direct", "Allows fast, direct, access to stream data via the direct get API").IsSetByUser(&c.allowDirectSet).BoolVar(&c.allowDirect)
-
+		if !edit {
+			f.Flag("republish-source", "Republish messages to --republish-destination").StringVar(&c.repubSource)
+			f.Flag("republish-destination", "Republish destination for messages in --republish-source").StringVar(&c.repubDest)
+			f.Flag("republish-headers", "Republish only message headers, no bodies").UnNegatableBoolVar(&c.repubHeadersOnly)
+		}
 		f.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
 
 		f.PreAction(c.parseLimitStrings)
@@ -185,12 +191,10 @@ func configureStreamCommand(app commandHost) {
 	strAdd.Flag("validate", "Only validates the configuration against the official Schema").UnNegatableBoolVar(&c.validateOnly)
 	strAdd.Flag("output", "Save configuration instead of creating").PlaceHolder("FILE").StringVar(&c.outFile)
 	addCreateFlags(strAdd, false)
-	strAdd.Flag("republish-source", "Republish messages to --republish-destination").StringVar(&c.repubSource)
-	strAdd.Flag("republish-destination", "Republish destination for messages in --republish-source").StringVar(&c.repubDest)
-	strAdd.Flag("republish-headers", "Republish only message headers, no bodies").UnNegatableBoolVar(&c.repubHeadersOnly)
 
 	strLs := str.Command("ls", "List all known Streams").Alias("list").Alias("l").Action(c.lsAction)
 	strLs.Flag("names", "Show just the stream names").Short('n').UnNegatableBoolVar(&c.listNames)
+	strLs.Flag("cluster", "Restrict streams to those in a specific cluster").StringVar(&c.fCluster)
 	strLs.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
 
 	strReport := str.Command("report", "Reports on Stream statistics").Action(c.reportAction)
@@ -213,6 +217,7 @@ func configureStreamCommand(app commandHost) {
 	strFind.Flag("subject", "Filters Streams by those with interest matching a subject or wildcard").StringVar(&c.filterSubject)
 	strFind.Flag("names", "Show just the stream names").Short('n').UnNegatableBoolVar(&c.listNames)
 	strFind.Flag("invert", "Invert the check - before becomes after, with becomes without").BoolVar(&c.fInvert)
+	strFind.Flag("report", "Produce a custom report based on results").Hidden().ExistingFileVar(&c.reportFile)
 
 	strInfo := str.Command("info", "Stream information").Alias("nfo").Alias("i").Action(c.infoAction)
 	strInfo.Arg("stream", "Stream to retrieve information for").StringVar(&c.stream)
@@ -430,6 +435,8 @@ func (c *streamCmd) findAction(_ *fisk.ParseContext) (err error) {
 		out, err = toJSON(found)
 	case c.listNames:
 		out = c.renderStreamsAsList(found)
+	case c.reportFile != "":
+		out, err = c.renderStreamsAsReport(found)
 	default:
 		out, err = c.renderStreamsAsTable(found)
 	}
@@ -2419,6 +2426,16 @@ func (c *streamCmd) lsAction(_ *fisk.ParseContext) error {
 			return
 		}
 
+		if c.fCluster != "" {
+			nfo, _ := s.LatestInformation()
+			if nfo.Cluster == nil {
+				return
+			}
+			if nfo.Cluster.Name != c.fCluster {
+				return
+			}
+		}
+
 		streams = append(streams, s)
 		names = append(names, s.Name())
 	})
@@ -2464,6 +2481,29 @@ func (c *streamCmd) renderStreamsAsList(streams []*jsm.Stream) string {
 	sort.Strings(names)
 
 	return strings.Join(names, "\n")
+}
+
+func (c *streamCmd) renderStreamsAsReport(streams []*jsm.Stream) (string, error) {
+	if c.reportFile == "" {
+		return "", fmt.Errorf("a report file is required")
+	}
+
+	r, err := goform.NewFromFile(c.reportFile, "Stream Report")
+	if err != nil {
+		return "", err
+	}
+
+	dat := make([]any, len(streams))
+	for i, s := range streams {
+		dat[i], _ = s.LatestInformation()
+	}
+
+	res, err := r.Report(dat)
+	if err != nil {
+		return "", err
+	}
+
+	return string(res), nil
 }
 
 func (c *streamCmd) renderStreamsAsTable(streams []*jsm.Stream) (string, error) {

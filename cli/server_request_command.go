@@ -14,9 +14,12 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/choria-io/fisk"
+	"github.com/choria-io/goform"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
@@ -47,6 +50,8 @@ type SrvRequestCmd struct {
 	accountFilter string
 	subjectFilter string
 	nameFilter    string
+
+	reportFile string
 }
 
 func configureServerRequestCommand(srv *fisk.CmdClause) {
@@ -59,6 +64,7 @@ func configureServerRequestCommand(srv *fisk.CmdClause) {
 	req.Flag("host", "Limit to servers matching a server host name").StringVar(&c.host)
 	req.Flag("cluster", "Limit to servers matching a cluster name").StringVar(&c.cluster)
 	req.Flag("tags", "Limit to servers with these configured tags").StringsVar(&c.tags)
+	req.Flag("report", "Produce a custom report based on results").Hidden().ExistingFileVar(&c.reportFile)
 
 	subz := req.Command("subscriptions", "Show subscription information").Alias("sub").Alias("subsz").Action(c.subs)
 	subz.Arg("wait", "Wait for a certain number of responses").Uint32Var(&c.waitFor)
@@ -107,6 +113,33 @@ func configureServerRequestCommand(srv *fisk.CmdClause) {
 	jsz.Flag("all", "Include accounts, streams, consumers and configuration").UnNegatableBoolVar(&c.includeAll)
 }
 
+func (c *SrvRequestCmd) renderRawResults(res [][]byte) {
+	for _, m := range res {
+		fmt.Println(string(m))
+	}
+}
+
+func (c *SrvRequestCmd) renderReport(res [][]byte, caption string, query string) {
+	data := []any{}
+	for _, m := range res {
+		i := map[string]any{}
+		err := json.Unmarshal(m, &i)
+		fisk.FatalIfError(err, "could not process server result")
+
+		data = append(data, i)
+	}
+
+	r, err := goform.NewFromFile(c.reportFile, caption)
+	fisk.FatalIfError(err, "could not read report")
+
+	if query != "" {
+		err = r.WriteReportContainedRows(os.Stdout, data, query)
+	} else {
+		err = r.WriteReport(os.Stdout, data)
+	}
+	fisk.FatalIfError(err, "creating report failed")
+}
+
 func (c *SrvRequestCmd) jsz(_ *fisk.ParseContext) error {
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
@@ -136,8 +169,10 @@ func (c *SrvRequestCmd) jsz(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	for _, m := range res {
-		fmt.Println(string(m))
+	if c.reportFile != "" {
+		c.renderReport(res, "JetStream", "")
+	} else {
+		c.renderRawResults(res)
 	}
 
 	return nil
@@ -169,8 +204,10 @@ func (c *SrvRequestCmd) accountz(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	for _, m := range res {
-		fmt.Println(string(m))
+	if c.reportFile != "" {
+		c.renderReport(res, "Accounts", "")
+	} else {
+		c.renderRawResults(res)
 	}
 
 	return nil
@@ -192,8 +229,10 @@ func (c *SrvRequestCmd) leafz(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	for _, m := range res {
-		fmt.Println(string(m))
+	if c.reportFile != "" {
+		c.renderReport(res, "Leafnodes", "")
+	} else {
+		c.renderRawResults(res)
 	}
 
 	return nil
@@ -223,8 +262,10 @@ func (c *SrvRequestCmd) gwyz(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	for _, m := range res {
-		fmt.Println(string(m))
+	if c.reportFile != "" {
+		c.renderReport(res, "Gateways", "")
+	} else {
+		c.renderRawResults(res)
 	}
 
 	return nil
@@ -249,8 +290,10 @@ func (c *SrvRequestCmd) routez(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	for _, m := range res {
-		fmt.Println(string(m))
+	if c.reportFile != "" {
+		c.renderReport(res, "Routes", "data.routes")
+	} else {
+		c.renderRawResults(res)
 	}
 
 	return nil
@@ -292,8 +335,10 @@ func (c *SrvRequestCmd) conns(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	for _, m := range res {
-		fmt.Println(string(m))
+	if c.reportFile != "" {
+		c.renderReport(res, "Connections", "")
+	} else {
+		c.renderRawResults(res)
 	}
 
 	return nil
@@ -316,8 +361,10 @@ func (c *SrvRequestCmd) varz(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	for _, m := range res {
-		fmt.Println(string(m))
+	if c.reportFile != "" {
+		c.renderReport(res, "Server", "")
+	} else {
+		c.renderRawResults(res)
 	}
 
 	return nil
@@ -346,8 +393,10 @@ func (c *SrvRequestCmd) subs(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	for _, m := range res {
-		fmt.Println(string(m))
+	if c.reportFile != "" {
+		c.renderReport(res, "Subscriptions", "")
+	} else {
+		c.renderRawResults(res)
 	}
 
 	return nil

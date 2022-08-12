@@ -6,6 +6,7 @@ require (
 	github.com/AlecAivazis/survey/v2 v2.3.5
 	github.com/HdrHistogram/hdrhistogram-go v1.1.2
 	github.com/choria-io/fisk v0.1.6-0.20220704204204-31c4e55ecb26
+	github.com/choria-io/goform v0.0.2
 	github.com/dustin/go-humanize v1.0.0
 	github.com/emicklei/dot v1.0.0
 	github.com/fatih/color v1.13.0
@@ -15,16 +16,16 @@ require (
 	github.com/guptarohit/asciigraph v0.5.5
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/klauspost/compress v1.15.9
-	github.com/nats-io/jsm.go v0.0.34-0.20220805075059-61166060fe2d
-	github.com/nats-io/nats-server/v2 v2.8.5-0.20220805010126-be54b08afd5e
-	github.com/nats-io/nats.go v1.16.1-0.20220804203020-c157d64783d9
+	github.com/nats-io/jsm.go v0.0.34-0.20220812093435-03aaa97caad8
+	github.com/nats-io/nats-server/v2 v2.8.5-0.20220811224153-d8d25d9b0b1c
+	github.com/nats-io/nats.go v1.16.1-0.20220810192301-fb5ca2cbc995
 	github.com/nats-io/nuid v1.0.1
 	github.com/prometheus/client_golang v1.12.2
 	github.com/prometheus/common v0.35.0
 	github.com/santhosh-tekuri/jsonschema/v5 v5.0.0
 	github.com/tylertreat/hdrhistogram-writer v0.0.0-20210816161836-2e440612a39f
 	github.com/xlab/tablewriter v0.0.0-20160610135559-80b567a11ad5
-	golang.org/x/crypto v0.0.0-20220622213112-05595931fe9d
+	golang.org/x/crypto v0.0.0-20220722155217-630584e8d5aa
 	golang.org/x/term v0.0.0-20220526004731-065cf7ba2467
 )
 
@@ -42,10 +43,13 @@ require (
 	github.com/nats-io/nkeys v0.3.0 // indirect
 	github.com/prometheus/client_model v0.2.0 // indirect
 	github.com/prometheus/procfs v0.7.3 // indirect
-	golang.org/x/sys v0.0.0-20220627191245-f75cf1eec38b // indirect
+	github.com/tidwall/gjson v1.14.2 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.0 // indirect
+	golang.org/x/sys v0.0.0-20220811171246-fbc7d0a398ab // indirect
 	golang.org/x/text v0.3.7 // indirect
-	golang.org/x/time v0.0.0-20220609170525-579cf78fd858 // indirect
+	golang.org/x/time v0.0.0-20220722155302-e5dcc9cfc0b9 // indirect
 	google.golang.org/protobuf v1.26.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
