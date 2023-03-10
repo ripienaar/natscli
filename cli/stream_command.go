@@ -818,6 +818,7 @@ func (c *streamCmd) restoreAction(_ *fisk.ParseContext) error {
 	if c.showProgress {
 		progress.Set(int(fp.ChunksSent()))
 		uiprogress.Stop()
+		time.Sleep(50 * time.Millisecond) // give the bar time to render the latest update
 	}
 
 	fmt.Println()
@@ -884,7 +885,7 @@ func backupStream(stream *jsm.Stream, showProgress bool, consumers bool, check b
 		bps = p.BytesPerSecond()
 
 		if showProgress {
-			bar.Set(int(p.BytesReceived()))
+			bar.Set(int(p.UncompressedBytesReceived()))
 		}
 
 		if p.Finished() {
@@ -924,7 +925,8 @@ func backupStream(stream *jsm.Stream, showProgress bool, consumers bool, check b
 
 	pmu.Lock()
 	if showProgress && inprogress {
-		bar.Set(int(fp.BytesReceived()))
+		bar.Set(int(fp.UncompressedBytesReceived()))
+		time.Sleep(100 * time.Millisecond)
 		uiprogress.Stop()
 		inprogress = false
 	}
@@ -935,7 +937,6 @@ func backupStream(stream *jsm.Stream, showProgress bool, consumers bool, check b
 	if timedOut {
 		return fmt.Errorf("backup timed out after receiving no data for a long period")
 	}
-
 	fmt.Printf("Received %s compressed data in %s chunks for stream %q in %v, %s uncompressed \n", humanize.IBytes(fp.BytesReceived()), humanize.Comma(int64(fp.ChunksReceived())), stream.Name(), fp.EndTime().Sub(fp.StartTime()).Round(time.Millisecond), humanize.IBytes(fp.UncompressedBytesReceived()))
 
 	return nil
