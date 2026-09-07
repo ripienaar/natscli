@@ -14,6 +14,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,7 +51,6 @@ type SrvClusterCmd struct {
 	balanceSubject    string
 	balanceRunTime    time.Duration
 	balanceKinds      []string
-	domain            string
 }
 
 func configureServerClusterCommand(srv *fisk.CmdClause) {
@@ -82,7 +82,6 @@ func configureServerClusterCommand(srv *fisk.CmdClause) {
 	rm.Flag("force", "Force removal without prompting").Short('f').UnNegatableBoolVar(&c.force)
 
 	rescue := cluster.Command("rescue", "Perform a cluster rescue operation").Action(c.metaRescueAction)
-	rescue.Flag("domain", "Target a specific domain").StringVar(&c.domain)
 	rescue.Tag("scope:system", "impact:rw")
 }
 
@@ -98,6 +97,7 @@ func (c *SrvClusterCmd) metaRescueAction(_ *fisk.ParseContext) error {
 	if err != nil {
 		return err
 	}
+	defer data.Close()
 
 	jszResponses, err := data.Jsz(server.JszEventOptions{})
 	if err != nil {
@@ -111,35 +111,39 @@ func (c *SrvClusterCmd) metaRescueAction(_ *fisk.ParseContext) error {
 	minOnline := math.MaxInt32
 	hasLeader := []bool{}
 	domains := map[string]struct{}{}
+	matched := 0
+	domain := opts().Config.JSDomain()
 
 	tbl := iu.NewTableWriter(opts(), "Current Cluster State")
 	tbl.AddHeaders("Server", "Cluster", "Size", "Peers", "Quorum Requires", "Rescuing")
 	for _, jsz := range jszResponses {
-		if c.domain != "" && jsz.Server.Domain != c.domain {
+		if jsz.Server == nil || jsz.Data == nil {
 			continue
 		}
 
-		qr := ""
-		peers := ""
-		size := ""
-		online := 0
-		srv := jsz.Server.Name
-
-		var meta *server.MetaClusterInfo
-		if jsz.Data.Meta == nil {
-			continue // leaf nodes without clusters maybe
+		domains[jsz.Server.Domain] = struct{}{}
+		if jsz.Server.Domain != domain {
+			continue
 		}
 
 		if !iu.VersionIsAtLeast(jsz.Server.Version, 2, 15, 0) {
-			fmt.Printf("Server version %q version %q is too old, requires at least 2.15.0\n", jsz.Server.Name, jsz.Server.Version)
+			fmt.Printf("Server %q version %q is too old, requires at least 2.15.0\n", jsz.Server.Name, jsz.Server.Version)
 			continue // possibly a leaf node so we only log it
 		}
 
-		meta = jsz.Data.Meta
-		hasLeader = append(hasLeader, meta.Leader != "")
+		if jsz.Data.Meta == nil {
+			continue // leaf nodes without clusters maybe or old machines
+		}
 
-		qr = f(meta.QuorumNeeded)
-		size = f(meta.Size)
+		online := 0
+		srv := jsz.Server.Name
+
+		meta := jsz.Data.Meta
+		hasLeader = append(hasLeader, meta.Leader != "")
+		matched++
+
+		qr := f(meta.QuorumNeeded)
+		size := f(meta.Size)
 		for _, replica := range meta.Replicas {
 			if !replica.Offline {
 				online++
@@ -148,26 +152,37 @@ func (c *SrvClusterCmd) metaRescueAction(_ *fisk.ParseContext) error {
 		if online < minOnline {
 			minOnline = online
 		}
-		peers = fmt.Sprintf("%d online / %d peers", online, len(meta.Replicas))
+
+		tp := len(meta.Replicas)
+		if meta.Leader != "" {
+			tp++
+			online++
+		}
+		peers := fmt.Sprintf("%d online / %d peers", online, tp)
 
 		if srv == meta.Leader {
 			srv = srv + "*"
 		}
 
-		domains[jsz.Server.Domain] = struct{}{}
-
 		tbl.AddRow(srv, jsz.Server.Cluster, size, peers, qr, f(meta.Rescue))
 	}
 
-	if len(hasLeader) == 0 { // every node with meta would have added a entry to this list, so this is a count of matching
+	if matched == 0 {
+		if len(domains) > 1 {
+			names := iu.MapKeys(domains)
+			slices.Sort(names)
+			for i, d := range names {
+				if d == "" {
+					names[i] = "no domain"
+				}
+			}
+
+			return fmt.Errorf("multiple domains found, pick one from %s", strings.Join(names, ", "))
+		}
 		return fmt.Errorf("no compatible servers found")
 	}
 
 	fmt.Println(tbl.Render())
-
-	if len(domains) > 1 {
-		return fmt.Errorf("multiple domains found, select one of %v using --domain", strings.Join(iu.MapKeys(domains), ", "))
-	}
 
 	if slices.Contains(hasLeader, true) {
 		fmt.Println("Cluster is healthy with a leader, no rescue needed")
@@ -192,13 +207,20 @@ func (c *SrvClusterCmd) metaRescueAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
+	if req < 1 || req > matched {
+		return fmt.Errorf("cluster quorum required to be greater than 0 and less than or equal the total amount of servers")
+	}
+
 	apiReq := api.JSApiMetaRescueRequest{QuorumNeeded: req}
 	jreq, err := json.Marshal(apiReq)
 	if err != nil {
 		return err
 	}
 
-	rResp, err := natsext.RequestMany(ctx, nc, jsm.APISubject(api.JSApiRescueRequest, "", c.domain), jreq, natsext.RequestManyMaxMessages(len(hasLeader)))
+	to, cancel := context.WithTimeout(ctx, opts().Timeout)
+	defer cancel()
+
+	rResp, err := natsext.RequestMany(to, nc, jsm.APISubject(api.JSApiRescueRequest, "", domain), jreq, natsext.RequestManyMaxMessages(matched))
 	if err != nil {
 		return err
 	}
@@ -207,7 +229,7 @@ func (c *SrvClusterCmd) metaRescueAction(_ *fisk.ParseContext) error {
 
 	for msg, err := range rResp {
 		if err != nil {
-			fmt.Printf("Unknown error received while handling rescue request responses: %v", err)
+			fmt.Printf("Unknown error received while handling rescue request responses: %v\n", err)
 			continue
 		}
 
@@ -222,7 +244,7 @@ func (c *SrvClusterCmd) metaRescueAction(_ *fisk.ParseContext) error {
 			continue
 		}
 
-		fmt.Printf("Server %q now required %d quorum size (was %d)\n", resp.Server, resp.NewQuorum, resp.PrevQuorum)
+		fmt.Printf("Server %q now requires %d quorum size (was %d)\n", resp.Server, resp.NewQuorum, resp.PrevQuorum)
 	}
 
 	fmt.Println()
