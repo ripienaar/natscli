@@ -19,9 +19,9 @@ require (
 	github.com/jedib0t/go-pretty/v6 v6.8.3
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/klauspost/compress v1.20.0
-	github.com/nats-io/jsm.go v0.4.2-0.20260903102257-f13696adbc2a
+	github.com/nats-io/jsm.go v0.4.2-0.20260907110945-19fe165a004c
 	github.com/nats-io/jwt/v2 v2.8.2
-	github.com/nats-io/nats-server/v2 v2.14.6
+	github.com/nats-io/nats-server/v2 v2.15.0-preview.1
 	github.com/nats-io/nats.go v1.53.1
 	github.com/nats-io/nkeys v0.4.16
 	github.com/nats-io/nuid v1.0.1
@@ -30,6 +30,7 @@ require (
 	github.com/synadia-io/jwt-auth-builder.go v0.0.10
 	github.com/synadia-io/orbit.go/counters v0.1.2
 	github.com/synadia-io/orbit.go/jetstreamext v0.3.2
+	github.com/synadia-io/orbit.go/natsext v0.1.3
 	github.com/tylertreat/hdrhistogram-writer v0.0.0-20210816161836-2e440612a39f
 	golang.org/x/crypto v0.56.0
 	golang.org/x/term v0.45.0
@@ -62,14 +63,13 @@ require (
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/nats-io/nsc/v2 v2.15.0 // indirect
+	github.com/nats-io/nsc/v2 v2.12.2 // indirect
 	github.com/nsf/termbox-go v1.1.2 // indirect
 	github.com/prometheus/client_model v0.6.3 // indirect
 	github.com/prometheus/common v0.71.0 // indirect
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
-	github.com/synadia-io/orbit.go/natsext v0.1.3 // indirect
 	golang.org/x/exp v0.0.0-20260824195058-e88cd73687aa // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
