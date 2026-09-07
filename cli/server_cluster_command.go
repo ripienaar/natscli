@@ -1,4 +1,4 @@
-// Copyright 2020-2024 The NATS Authors
+// Copyright 2020-2026 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,17 +14,25 @@
 package cli
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/AlecAivazis/survey/v2"
+	"github.com/nats-io/jsm.go"
 	"github.com/nats-io/jsm.go/api"
 	"github.com/nats-io/jsm.go/connbalancer"
 	"github.com/nats-io/jsm.go/serverdata"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	iu "github.com/nats-io/natscli/internal/util"
+	"github.com/synadia-io/orbit.go/natsext"
 
 	"github.com/choria-io/fisk"
 )
@@ -42,6 +50,7 @@ type SrvClusterCmd struct {
 	balanceSubject    string
 	balanceRunTime    time.Duration
 	balanceKinds      []string
+	domain            string
 }
 
 func configureServerClusterCommand(srv *fisk.CmdClause) {
@@ -71,6 +80,157 @@ func configureServerClusterCommand(srv *fisk.CmdClause) {
 	rm.Tag("scope:system", "impact:rw")
 	rm.Arg("name", "The Server Name or ID to remove from the JetStream cluster").Required().StringVar(&c.peer)
 	rm.Flag("force", "Force removal without prompting").Short('f').UnNegatableBoolVar(&c.force)
+
+	rescue := cluster.Command("rescue", "Perform a cluster rescue operation").Action(c.metaRescueAction)
+	rescue.Flag("domain", "Target a specific domain").StringVar(&c.domain)
+	rescue.Tag("scope:system", "impact:rw")
+}
+
+func (c *SrvClusterCmd) metaRescueAction(_ *fisk.ParseContext) error {
+	nc, _, err := prepareHelper("", natsOpts()...)
+	if err != nil {
+		return err
+	}
+
+	data, err := serverdata.NewLive(nc, func(req any, subj string, waitFor int, nc *nats.Conn) ([][]byte, error) {
+		return serverdata.DoReq(ctx, req, subj, waitFor, nc, opts().Timeout, traceLogger())
+	}, 0)
+	if err != nil {
+		return err
+	}
+
+	jszResponses, err := data.Jsz(server.JszEventOptions{})
+	if err != nil {
+		return err
+	}
+
+	if len(jszResponses) == 0 {
+		return errors.New("no JetStream cluster status received")
+	}
+
+	minOnline := math.MaxInt32
+	hasLeader := []bool{}
+	domains := map[string]struct{}{}
+
+	tbl := iu.NewTableWriter(opts(), "Current Cluster State")
+	tbl.AddHeaders("Server", "Cluster", "Size", "Peers", "Quorum Requires", "Rescuing")
+	for _, jsz := range jszResponses {
+		if c.domain != "" && jsz.Server.Domain != c.domain {
+			continue
+		}
+
+		qr := ""
+		peers := ""
+		size := ""
+		online := 0
+		srv := jsz.Server.Name
+
+		var meta *server.MetaClusterInfo
+		if jsz.Data.Meta == nil {
+			continue // leaf nodes without clusters maybe
+		}
+
+		if !iu.VersionIsAtLeast(jsz.Server.Version, 2, 15, 0) {
+			fmt.Printf("Server version %q version %q is too old, requires at least 2.15.0\n", jsz.Server.Name, jsz.Server.Version)
+			continue // possibly a leaf node so we only log it
+		}
+
+		meta = jsz.Data.Meta
+		hasLeader = append(hasLeader, meta.Leader != "")
+
+		qr = f(meta.QuorumNeeded)
+		size = f(meta.Size)
+		for _, replica := range meta.Replicas {
+			if !replica.Offline {
+				online++
+			}
+		}
+		if online < minOnline {
+			minOnline = online
+		}
+		peers = fmt.Sprintf("%d online / %d peers", online, len(meta.Replicas))
+
+		if srv == meta.Leader {
+			srv = srv + "*"
+		}
+
+		domains[jsz.Server.Domain] = struct{}{}
+
+		tbl.AddRow(srv, jsz.Server.Cluster, size, peers, qr, f(meta.Rescue))
+	}
+
+	if len(hasLeader) == 0 { // every node with meta would have added a entry to this list, so this is a count of matching
+		return fmt.Errorf("no compatible servers found")
+	}
+
+	fmt.Println(tbl.Render())
+
+	if len(domains) > 1 {
+		return fmt.Errorf("multiple domains found, select one of %v using --domain", strings.Join(iu.MapKeys(domains), ", "))
+	}
+
+	if slices.Contains(hasLeader, true) {
+		fmt.Println("Cluster is healthy with a leader, no rescue needed")
+		return nil
+	}
+
+	fmt.Println("Rescuing a cluster is for situations where a server was removed that can not come back")
+	fmt.Println("without first using the peer-remove command.")
+	fmt.Println()
+	fmt.Println("Rescue will temporarily lower the number of servers required to form a healthy cluster")
+	fmt.Println("so new nodes can be added replacing the removed ones.")
+	fmt.Println()
+	fmt.Println("Use the above report to determine the minimum number of servers required to form a cluster.")
+	fmt.Println()
+
+	var req int
+	err = iu.AskOne(&survey.Input{
+		Message: "How many peers to require for a meta cluster quorum",
+		Default: strconv.Itoa(minOnline),
+	}, &req)
+	if err != nil {
+		return err
+	}
+
+	apiReq := api.JSApiMetaRescueRequest{QuorumNeeded: req}
+	jreq, err := json.Marshal(apiReq)
+	if err != nil {
+		return err
+	}
+
+	rResp, err := natsext.RequestMany(ctx, nc, jsm.APISubject(api.JSApiRescueRequest, "", c.domain), jreq, natsext.RequestManyMaxMessages(len(hasLeader)))
+	if err != nil {
+		return err
+	}
+
+	fmt.Println()
+
+	for msg, err := range rResp {
+		if err != nil {
+			fmt.Printf("Unknown error received while handling rescue request responses: %v", err)
+			continue
+		}
+
+		var resp api.JSApiMetaRescueResponse
+		err = json.Unmarshal(msg.Data, &resp)
+		if err != nil {
+			fmt.Printf("Error unmarshalling response: %s\n", string(msg.Data))
+			continue
+		}
+		if resp.Error != nil {
+			fmt.Printf("Server %q: %v \n", resp.Server, resp.Error.Error())
+			continue
+		}
+
+		fmt.Printf("Server %q now required %d quorum size (was %d)\n", resp.Server, resp.NewQuorum, resp.PrevQuorum)
+	}
+
+	fmt.Println()
+	fmt.Println("The final step is to use the 'nats server cluster peer-remove' command to remove the")
+	fmt.Println("servers you removed from the cluster. Once only the required amount of nodes are up")
+	fmt.Println("and in the meta cluster normal operations will resume.")
+
+	return nil
 }
 
 func (c *SrvClusterCmd) balanceAction(_ *fisk.ParseContext) error {
