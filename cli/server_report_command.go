@@ -1,4 +1,4 @@
-// Copyright 2020-2025 The NATS Authors
+// Copyright 2020-2026 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -878,7 +878,7 @@ func (c *SrvReportCmd) reportJetStream(_ *fisk.ParseContext) error {
 	if renderDomain {
 		hdrs = append(hdrs, "Domain")
 	}
-	hdrs = append(hdrs, "Streams", "Consumers", "Messages", "Bytes", "Memory", "File", "API Req", "Pending")
+	hdrs = append(hdrs, "Streams", "Consumers", "Messages", "Bytes", "Memory", "File", "API Req", "Pending", "Quorum Sz", "Rescuing")
 	table.AddHeaders(hdrs...)
 
 	for i, js := range jszResponses {
@@ -959,6 +959,13 @@ func (c *SrvReportCmd) reportJetStream(_ *fisk.ParseContext) error {
 			pendingTotal += rPending
 		}
 
+		quorumNeeded := ""
+		rescuing := ""
+		if js.Data.Meta != nil {
+			quorumNeeded = f(js.Data.Meta.QuorumNeeded)
+			rescuing = f(js.Data.Meta.Rescue)
+		}
+
 		row := []any{cNames[i] + leader, js.Server.Cluster}
 		if renderDomain {
 			row = append(row, js.Data.Config.Domain)
@@ -973,6 +980,8 @@ func (c *SrvReportCmd) reportJetStream(_ *fisk.ParseContext) error {
 			humanize.IBytes(jss.Store),
 			f(jss.API.Total),
 			rPending,
+			quorumNeeded,
+			rescuing,
 		)
 
 		table.AddRow(row...)
