@@ -38,7 +38,7 @@ nats stream view --subject one.subject
 
 # Backup and restore
 nats stream backup ORDERS backups/orders/$(date +%Y-%m-%d)
-nats stream restore ORDERS backups/orders/$(date +%Y-%m-%d)
+nats stream restore backups/orders/$(date +%Y-%m-%d)
 
 # Marks a stream as read only
 nats stream seal ORDERS
