@@ -2176,6 +2176,7 @@ func (c *streamCmd) showStreamConfig(cols *columns.Writer, cfg api.StreamConfig)
 	if cfg.Placement != nil {
 		cols.AddRowIfNotEmpty("Placement Cluster", cfg.Placement.Cluster)
 		cols.AddRowIf("Placement Tags", cfg.Placement.Tags, len(cfg.Placement.Tags) > 0)
+		cols.AddRowIfNotEmpty("Preferred", cfg.Placement.Preferred)
 	}
 
 	cols.AddSectionTitle("Options")
@@ -2329,6 +2330,131 @@ func (c *streamCmd) showStream(stream *jsm.Stream) error {
 	return nil
 }
 
+func (c *streamCmd) showSource(cols *columns.Writer, s *api.StreamSourceInfo) {
+	cols.AddRow("Stream Name", s.Name)
+
+	switch {
+	case s.FilterSubject != "":
+		filter := ">"
+		if s.FilterSubject != "" {
+			filter = s.FilterSubject
+		}
+
+		cols.AddRow("Subject Filter", filter)
+	case len(s.SubjectTransforms) > 0:
+		for i := range s.SubjectTransforms {
+			t := ""
+
+			if i == 0 {
+				if len(s.SubjectTransforms) > 1 {
+					t = "Subject Filters and Transforms"
+				} else {
+					t = "Subject Filter and Transform"
+				}
+			}
+
+			if s.SubjectTransforms[i].Destination == "" {
+				cols.AddRowf(t, "%s untransformed", s.SubjectTransforms[i].Source)
+			} else {
+				cols.AddRowf(t, "%s to %s", s.SubjectTransforms[i].Source, s.SubjectTransforms[i].Destination)
+			}
+		}
+	}
+
+	cols.AddRow("Lag", s.Lag)
+
+	if s.Active > 0 && s.Active < math.MaxInt64 {
+		cols.AddRow("Last Seen", s.Active)
+	} else {
+		cols.AddRow("Last Seen", "never")
+	}
+
+	if s.External != nil {
+		cols.AddRow("Ext. API Prefix", s.External.ApiPrefix)
+		if s.External.DeliverPrefix != "" {
+			cols.AddRow("Ext. Delivery Prefix", s.External.DeliverPrefix)
+		}
+	}
+
+	if s.Error != nil {
+		cols.AddRow("Error", s.Error.Description)
+	}
+}
+
+// placementValues renders a placement as its tags and preferred server, the cluster
+// is reported using the Cluster row, a nil placement or unset field renders as an
+// empty string
+func (c *streamCmd) placementValues(p *api.Placement) (tags string, preferred string) {
+	if p == nil {
+		return "", ""
+	}
+	if len(p.Tags) > 0 {
+		tags = f(p.Tags)
+	}
+
+	return tags, p.Preferred
+}
+
+// addChangedRow adds a "from -> to" row when the values differ, empty values render as none
+func (c *streamCmd) addChangedRow(cols *columns.Writer, title string, from string, to string) {
+	if from == to {
+		return
+	}
+	if from == "" {
+		from = "none"
+	}
+	if to == "" {
+		to = "none"
+	}
+
+	cols.AddRowf(title, "%s -> %s", from, to)
+}
+
+func (c *streamCmd) showDesiredState(cols *columns.Writer, desired *api.DesiredClusterInfo, cfg *api.StreamConfig, cluster *api.ClusterInfo, ts time.Time) {
+	cols.Indent(3)
+	defer cols.Indent(0)
+
+	cols.AddSectionTitle("Cluster Migration Status")
+	if desired.Status != nil {
+		cols.AddRowIfNotEmpty("Status", desired.Status.Description)
+		cols.AddRowIfNotEmpty("Type", f(desired.Status.Type))
+		cols.AddRowIfNotEmpty("Error", desired.Status.Err)
+	}
+	cols.AddRowf("Created", "%s (%s)", f(desired.Created), f(sinceRefOrNow(ts, desired.Created)))
+	cols.Println()
+	if desired.Name != cluster.Name {
+		cols.AddRowf("Cluster", "%s -> %s", cluster.Name, desired.Name)
+	}
+	if desired.Origin != nil {
+		if desired.Origin.Replicas != cfg.Replicas {
+			cols.AddRowf("Replicas", "%d -> %d", desired.Origin.Replicas, cfg.Replicas)
+		}
+
+		ot, op := c.placementValues(desired.Origin.Placement)
+		nt, np := c.placementValues(cfg.Placement)
+		c.addChangedRow(cols, "Placement Tags", ot, nt)
+		c.addChangedRow(cols, "Preferred", op, np)
+		if desired.Origin.Retention != nil && cfg.Retention != *desired.Origin.Retention {
+			cols.AddRowf("Retention Policy", "%s -> %s", desired.Origin.Retention.String(), cfg.Retention.String())
+		}
+	}
+
+	if len(desired.Replicas) > 0 {
+		peers := []string{}
+		for _, replica := range desired.Replicas {
+			if replica.Offline {
+				peers = append(peers, fmt.Sprintf("%s (offline)", replica.Name))
+			} else {
+				peers = append(peers, replica.Name)
+			}
+		}
+
+		if len(peers) > 0 {
+			cols.AddStringsAsValue("Desired Peers", peers)
+		}
+	}
+}
+
 func (c *streamCmd) showStreamInfo(info *api.StreamInfo) {
 	if c.json {
 		err := iu.PrintJSON(info)
@@ -2348,6 +2474,8 @@ func (c *streamCmd) showStreamInfo(info *api.StreamInfo) {
 		cols.AddSectionTitle("Cluster Information")
 		if info.Cluster != nil && info.Cluster.Name != "" {
 			cols.AddRow("Name", info.Cluster.Name)
+			cols.AddRowIf("Cluster Traffic Account", "System Account", info.Cluster.SystemAcc)
+			cols.AddRowIf("Cluster Traffic Account", info.Cluster.TrafficAcc, !info.Cluster.SystemAcc && info.Cluster.TrafficAcc != "")
 			cols.AddRowIfNotEmpty("Cluster Group", info.Cluster.RaftGroup)
 			if info.Cluster.LeaderSince == nil {
 				cols.AddRow("Leader", info.Cluster.Leader)
@@ -2374,6 +2502,10 @@ func (c *streamCmd) showStreamInfo(info *api.StreamInfo) {
 					state = append(state, "not seen")
 				}
 
+				if r.Pending {
+					state = append(state, "(pending)")
+				}
+
 				switch {
 				case r.Lag > 1:
 					state = append(state, fmt.Sprintf("%s operations behind", f(r.Lag)))
@@ -2384,69 +2516,23 @@ func (c *streamCmd) showStreamInfo(info *api.StreamInfo) {
 				cols.AddRow("Replica", state)
 			}
 		}
+
+		if info.Cluster.Desired != nil {
+			c.showDesiredState(cols, info.Cluster.Desired, &info.Config, info.Cluster, info.TimeStamp)
+		}
+
 		cols.Println()
-	}
-
-	showSource := func(s *api.StreamSourceInfo) {
-		cols.AddRow("Stream Name", s.Name)
-
-		switch {
-		case s.FilterSubject != "":
-			filter := ">"
-			if s.FilterSubject != "" {
-				filter = s.FilterSubject
-			}
-
-			cols.AddRow("Subject Filter", filter)
-		case len(s.SubjectTransforms) > 0:
-			for i := range s.SubjectTransforms {
-				t := ""
-
-				if i == 0 {
-					if len(s.SubjectTransforms) > 1 {
-						t = "Subject Filters and Transforms"
-					} else {
-						t = "Subject Filter and Transform"
-					}
-				}
-
-				if s.SubjectTransforms[i].Destination == "" {
-					cols.AddRowf(t, "%s untransformed", s.SubjectTransforms[i].Source)
-				} else {
-					cols.AddRowf(t, "%s to %s", s.SubjectTransforms[i].Source, s.SubjectTransforms[i].Destination)
-				}
-			}
-		}
-
-		cols.AddRow("Lag", s.Lag)
-
-		if s.Active > 0 && s.Active < math.MaxInt64 {
-			cols.AddRow("Last Seen", s.Active)
-		} else {
-			cols.AddRow("Last Seen", "never")
-		}
-
-		if s.External != nil {
-			cols.AddRow("Ext. API Prefix", s.External.ApiPrefix)
-			if s.External.DeliverPrefix != "" {
-				cols.AddRow("Ext. Delivery Prefix", s.External.DeliverPrefix)
-			}
-		}
-
-		if s.Error != nil {
-			cols.AddRow("Error", s.Error.Description)
-		}
 	}
 
 	if info.Mirror != nil {
 		cols.AddSectionTitle("Mirror Information")
-		showSource(info.Mirror)
+		c.showSource(cols, info.Mirror)
 	}
 
 	if len(info.Sources) > 0 {
 		cols.AddSectionTitle("Source Information")
 		for _, s := range info.Sources {
-			showSource(s)
+			c.showSource(cols, s)
 			cols.Println()
 		}
 	}
