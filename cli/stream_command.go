@@ -1106,7 +1106,7 @@ func (c *streamCmd) evacuatePeer(_ *fisk.ParseContext) error {
 		}
 	}
 
-	log.Printf("Removing stream from peer %q", c.peerName)
+	log.Printf("Evacuating stream from peer %q", c.peerName)
 
 	if !c.force {
 		ok, err := askConfirmation(fmt.Sprintf("Really evacuate %q", c.peerName), false)
