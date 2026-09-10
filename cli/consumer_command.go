@@ -390,7 +390,7 @@ func (c *consumerCmd) evacuatePeer(_ *fisk.ParseContext) error {
 		}
 	}
 
-	log.Printf("Removing consumer from peer %q", c.peerName)
+	log.Printf("Evacuating consumer from peer %q", c.peerName)
 
 	if !c.force {
 		ok, err := askConfirmation(fmt.Sprintf("Really evacuate %q", c.peerName), false)
