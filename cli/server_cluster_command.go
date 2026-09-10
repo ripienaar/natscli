@@ -522,7 +522,7 @@ func (c *SrvClusterCmd) evacuateAction(_ *fisk.ParseContext) error {
 		}
 	}
 
-	log.Printf("Removing assets from peer %q", c.peerName)
+	log.Printf("Evacuating assets from peer %q", c.peerName)
 
 	if !c.force {
 		ok, err := askConfirmation(fmt.Sprintf("Really evacuate %q", c.peerName), false)
