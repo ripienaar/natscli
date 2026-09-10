@@ -51,6 +51,7 @@ type SrvClusterCmd struct {
 	balanceSubject    string
 	balanceRunTime    time.Duration
 	balanceKinds      []string
+	peerName          string
 }
 
 func configureServerClusterCommand(srv *fisk.CmdClause) {
@@ -68,6 +69,11 @@ func configureServerClusterCommand(srv *fisk.CmdClause) {
 	balance.Flag("subject", "Balance connections interested in certain subjects").StringVar(&c.balanceSubject)
 	balance.Flag("kind", "Balance only certain kinds of connection (*Client, Leafnode)").Default("Client").EnumsVar(&c.balanceKinds, "Client", "Leafnode")
 	balance.Flag("force", "Force rebalance without prompting").Short('f').UnNegatableBoolVar(&c.force)
+
+	evacuate := cluster.Command("evacuate", "Move all JetStream assets for a peer to other peers").Action(c.evacuateAction)
+	evacuate.Tag("scope:system", "impact:rw")
+	evacuate.Arg("peer", "The name of the peer to remove").StringVar(&c.peerName)
+	evacuate.Flag("force", "Force evacuation without prompting").Short('f').UnNegatableBoolVar(&c.force)
 
 	sd := cluster.Command("step-down", "Force a new leader election by standing down the current meta leader").Alias("stepdown").Alias("sd").Alias("elect").Alias("down").Alias("d").Action(c.metaLeaderStandDownAction)
 	sd.Tag("scope:system", "impact:rw")
@@ -454,6 +460,125 @@ which may lead to duplicate deliveries.`)
 	fisk.FatalIfError(err, "Could not remove %s", foundID)
 
 	return nil
+}
+
+func (c *SrvClusterCmd) evacuateAction(_ *fisk.ParseContext) error {
+	nc, mgr, err := prepareHelper("", natsOpts()...)
+	if err != nil {
+		return err
+	}
+
+	domain := opts().Config.JSDomain()
+
+	live, err := serverdata.NewLive(nc, func(req any, subj string, waitFor int, nc *nats.Conn) ([][]byte, error) {
+		return serverdata.DoReq(ctx, req, subj, waitFor, nc, opts().Timeout, traceLogger())
+	}, 0)
+	if err != nil {
+		return err
+	}
+
+	responses, err := live.Jsz(server.JszEventOptions{
+		EventFilterOptions: server.EventFilterOptions{Domain: domain},
+		JSzOptions:         server.JSzOptions{LeaderOnly: true},
+	})
+	if err != nil {
+		return err
+	}
+
+	var leaders []*server.ServerAPIJszResponse
+
+	for _, s := range responses {
+		switch {
+		case s.Server == nil:
+			continue
+		case domain == "":
+			leaders = append(leaders, s)
+		case s.Server.Domain == domain:
+			leaders = append(leaders, s)
+		}
+	}
+
+	if len(leaders) == 0 {
+		return fmt.Errorf("did not find any active leader")
+	}
+
+	if len(leaders) > 1 {
+		return fmt.Errorf("received responses from multiple leaders, specify a domain to target using --js-domain")
+	}
+
+	lead := leaders[0]
+	peerNames := []string{lead.Data.Meta.Leader}
+	for _, r := range lead.Data.Meta.Replicas {
+		peerNames = append(peerNames, r.Name)
+	}
+
+	if c.peerName == "" {
+		err = iu.AskOne(&survey.Select{
+			Message: "Select a Peer",
+			Options: peerNames,
+		}, &c.peerName)
+		if err != nil {
+			return err
+		}
+	}
+
+	log.Printf("Removing assets from peer %q", c.peerName)
+
+	if !c.force {
+		ok, err := askConfirmation(fmt.Sprintf("Really evacuate %q", c.peerName), false)
+		fisk.FatalIfError(err, "could not obtain confirmation")
+
+		if !ok {
+			return nil
+		}
+	}
+
+	poll := func() bool {
+		responses, err := live.Jsz(server.JszEventOptions{
+			EventFilterOptions: server.EventFilterOptions{Name: c.peerName, Domain: domain},
+		})
+		if err != nil {
+			return true
+		}
+
+		if len(responses) != 1 {
+			return true
+		}
+
+		fmt.Printf("Server %q: Streams: %d Consumers: %d\n", c.peerName, responses[0].Data.Streams, responses[0].Data.Consumers)
+
+		if responses[0].Data.Streams == 0 && responses[0].Data.Consumers == 0 {
+			return false
+		}
+
+		return true
+	}
+
+	err = mgr.MetaEvacuatePeer(c.peerName, c.peer)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println()
+	log.Printf("Requested evacuation of peer %q, watching progress for up to 5 minutes", c.peerName)
+	fmt.Println()
+
+	if !poll() {
+		return nil
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	timer := time.NewTimer(5 * time.Minute)
+	for {
+		select {
+		case <-ticker.C:
+			if !poll() {
+				return nil
+			}
+		case <-timer.C:
+			return fmt.Errorf("timed out waiting for evacuation of peer %q review progress with 'nats server report jetstream'", c.peerName)
+		}
+	}
 }
 
 func (c *SrvClusterCmd) metaLeaderStandDownAction(_ *fisk.ParseContext) error {

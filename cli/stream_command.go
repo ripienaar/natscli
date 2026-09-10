@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -472,11 +473,17 @@ Finding streams with certain subjects configured:
 	strClusterBalance.Flag("invert", "Invert the check - before becomes after, with becomes without").BoolVar(&c.fInvert)
 	strClusterBalance.Flag("expression", "Balance matching streams using an expression language").StringVar(&c.fExpression)
 
-	strClusterRemovePeer := strCluster.Command("peer-remove", "Removes a peer from the stream cluster").Alias("pr").Action(c.removePeer)
+	strClusterRemovePeer := strCluster.Command("peer-remove", "Removes a peer from the stream cluster").Alias("pr").Hidden().Action(c.removePeer)
 	strClusterRemovePeer.Tag("scope:user", "impact:rw")
 	strClusterRemovePeer.Arg("stream", "The stream to act on").StringVar(&c.stream)
 	strClusterRemovePeer.Arg("peer", "The name of the peer to remove").StringVar(&c.peerName)
 	strClusterRemovePeer.Flag("force", "Force sealing without prompting").Short('f').UnNegatableBoolVar(&c.force)
+
+	strClusterEvacuatePeer := strCluster.Command("evacuate", "Removes a stream from a peer").Action(c.evacuatePeer)
+	strClusterEvacuatePeer.Tag("scope:user", "impact:rw")
+	strClusterEvacuatePeer.Arg("stream", "The stream to act on").StringVar(&c.stream)
+	strClusterEvacuatePeer.Arg("peer", "The name of the peer to remove").StringVar(&c.peerName)
+	strClusterEvacuatePeer.Flag("force", "Force evacuation without prompt").Short('f').UnNegatableBoolVar(&c.force)
 }
 
 func init() {
@@ -1067,7 +1074,7 @@ func (c *streamCmd) leaderStandDown(_ *fisk.ParseContext) error {
 	return c.showStream(stream)
 }
 
-func (c *streamCmd) removePeer(_ *fisk.ParseContext) error {
+func (c *streamCmd) evacuatePeer(_ *fisk.ParseContext) error {
 	c.connectAndAskStream()
 
 	stream, err := c.loadStream(c.stream)
@@ -1081,6 +1088,88 @@ func (c *streamCmd) removePeer(_ *fisk.ParseContext) error {
 	}
 
 	if info.Cluster == nil {
+		return fmt.Errorf("stream %q is not clustered", stream.Name())
+	}
+
+	peerNames := []string{info.Cluster.Leader}
+	for _, r := range info.Cluster.Replicas {
+		peerNames = append(peerNames, r.Name)
+	}
+
+	if c.peerName == "" {
+		err = iu.AskOne(&survey.Select{
+			Message: "Select a Peer",
+			Options: peerNames,
+		}, &c.peerName)
+		if err != nil {
+			return err
+		}
+	}
+
+	log.Printf("Removing stream from peer %q", c.peerName)
+
+	if !c.force {
+		ok, err := askConfirmation(fmt.Sprintf("Really evacuate %q", c.peerName), false)
+		fisk.FatalIfError(err, "could not obtain confirmation")
+
+		if !ok {
+			return nil
+		}
+	}
+
+	err = stream.EvacuatePeer(c.peerName)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Requested evacuation of peer %q", c.peerName)
+
+	log.Printf("Waiting up to 1 minute for peer state to change")
+	fmt.Println()
+	ticker := time.NewTicker(1 * time.Second)
+	to := time.NewTimer(time.Minute)
+	for {
+		select {
+		case <-ticker.C:
+			nfo, err := stream.Information()
+			if err == nil {
+				peers := []string{nfo.Cluster.Leader}
+				for _, p := range nfo.Cluster.Replicas {
+					peers = append(peers, p.Name)
+				}
+
+				if !slices.Contains(peers, c.peerName) {
+					fmt.Println()
+					fmt.Println()
+					fmt.Printf("Stream peers are now: %s\n", strings.Join(peers, ", "))
+					return nil
+				}
+				fmt.Print(".")
+			}
+		case <-to.C:
+			return fmt.Errorf("stream failed to evacuate %q, review stream state using 'nats stream info'", c.peerName)
+		}
+	}
+}
+
+func (c *streamCmd) removePeer(_ *fisk.ParseContext) error {
+	fmt.Println("WARNING: Users should use the new `nats stream cluster evacuate` and replica count adjustments")
+	fmt.Println("for peer membership management which is a newer and safer approach.")
+	fmt.Println()
+
+	c.connectAndAskStream()
+
+	stream, err := c.loadStream(c.stream)
+	if err != nil {
+		return err
+	}
+
+	info, err := stream.Information()
+	if err != nil {
+		return err
+	}
+
+	if info.Cluster == nil || len(info.Cluster.Replicas) == 0 {
 		return fmt.Errorf("stream %q is not clustered", stream.Name())
 	}
 
