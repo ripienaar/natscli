@@ -354,7 +354,7 @@ func configureConsumerCommand(app commandHost) {
 	conClusterEvacuate := conCluster.Command("evacuate", "Evacuates a consumer off a peer").Action(c.evacuatePeer)
 	conClusterEvacuate.Tag("scope:user", "impact:rw")
 	conClusterEvacuate.Arg("stream", "The stream to act on").StringVar(&c.stream)
-	conClusterEvacuate.Arg("consumer", "Consumer to act on").StringVar(&c.consumer)
+	conClusterEvacuate.Arg("consumer", "The consumer to act on").StringVar(&c.consumer)
 	conClusterEvacuate.Arg("peer", "The name of the peer to remove").StringVar(&c.peerName)
 	conClusterEvacuate.Flag("force", "Force evacuation without prompt").Short('f').UnNegatableBoolVar(&c.force)
 }
