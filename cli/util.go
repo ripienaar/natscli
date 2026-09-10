@@ -1,4 +1,4 @@
-// Copyright 2020-2025 The NATS Authors
+// Copyright 2020-2026 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -141,13 +141,6 @@ func selectStream(mgr *jsm.Manager, stream string, force bool, all bool) (string
 
 		return s, nil, nil
 	}
-}
-
-func sinceRefOrNow(ref time.Time, ts time.Time) time.Duration {
-	if ref.IsZero() {
-		return time.Since(ts)
-	}
-	return ref.Sub(ts)
 }
 
 func askConfirmation(prompt string, dflt bool) (bool, error) {

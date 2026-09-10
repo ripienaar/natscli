@@ -30,6 +30,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -695,4 +696,12 @@ func FmtReplicaDrift(replica, leader float64) string {
 	// strip . if it exists
 	pct = strings.TrimRight(pct, ".")
 	return fmt.Sprintf("%.0f (%s%%)", replica, pct)
+}
+
+// SinceRefOrNow returns a duration relative to given time or now
+func SinceRefOrNow(ref time.Time, ts time.Time) time.Duration {
+	if ref.IsZero() {
+		return time.Since(ts)
+	}
+	return ref.Sub(ts)
 }
