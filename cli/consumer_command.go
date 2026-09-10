@@ -1119,9 +1119,9 @@ func (c *consumerCmd) renderConsumerAsTable(stream *jsm.Stream) (string, error) 
 			return
 		}
 
-		lastDelivery := sinceRefOrNow(cs.TimeStamp, time.Time{})
+		lastDelivery := iu.SinceRefOrNow(cs.TimeStamp, time.Time{})
 		if cs.Delivered.Last != nil {
-			lastDelivery = sinceRefOrNow(cs.TimeStamp, *cs.Delivered.Last)
+			lastDelivery = iu.SinceRefOrNow(cs.TimeStamp, *cs.Delivered.Last)
 		}
 
 		table.AddRow(cs.Name, cs.Config.Description, f(cs.Created.Local()), cs.NumAckPending, cs.NumPending, f(lastDelivery))
@@ -1279,7 +1279,7 @@ func (c *consumerCmd) showInfo(config api.ConsumerConfig, state api.ConsumerInfo
 		if state.Cluster.LeaderSince == nil {
 			cols.AddRow("Leader", state.Cluster.Leader)
 		} else {
-			cols.AddRowf("Leader", "%s (%s)", state.Cluster.Leader, f(sinceRefOrNow(state.TimeStamp, *state.Cluster.LeaderSince)))
+			cols.AddRowf("Leader", "%s (%s)", state.Cluster.Leader, f(iu.SinceRefOrNow(state.TimeStamp, *state.Cluster.LeaderSince)))
 		}
 		for _, r := range state.Cluster.Replicas {
 			since := fmt.Sprintf("seen %s ago", f(r.Active))
@@ -1293,6 +1293,11 @@ func (c *consumerCmd) showInfo(config api.ConsumerConfig, state api.ConsumerInfo
 				cols.AddRowf("Replica", "%s, outdated, %s", r.Name, since)
 			}
 		}
+
+		if state.Cluster.Desired != nil {
+			iu.RenderDesiredState(cols, state.Cluster.Desired, state.Config.Replicas, nil, nil, state.Cluster, state.TimeStamp)
+
+		}
 	}
 
 	cols.AddSectionTitle("State")
@@ -1300,14 +1305,14 @@ func (c *consumerCmd) showInfo(config api.ConsumerConfig, state api.ConsumerInfo
 	if state.Delivered.Last == nil {
 		cols.AddRowf("Last Delivered Message", "Consumer sequence: %s Stream sequence: %s", f(state.Delivered.Consumer), f(state.Delivered.Stream))
 	} else {
-		cols.AddRowf("Last Delivered Message", "Consumer sequence: %s Stream sequence: %s Last delivery: %s ago", f(state.Delivered.Consumer), f(state.Delivered.Stream), f(sinceRefOrNow(state.TimeStamp, *state.Delivered.Last)))
+		cols.AddRowf("Last Delivered Message", "Consumer sequence: %s Stream sequence: %s Last delivery: %s ago", f(state.Delivered.Consumer), f(state.Delivered.Stream), f(iu.SinceRefOrNow(state.TimeStamp, *state.Delivered.Last)))
 	}
 
 	if config.AckPolicy != api.AckNone {
 		if state.AckFloor.Last == nil {
 			cols.AddRowf("Acknowledgment Floor", "Consumer sequence: %s Stream sequence: %s", f(state.AckFloor.Consumer), f(state.AckFloor.Stream))
 		} else {
-			cols.AddRowf("Acknowledgment Floor", "Consumer sequence: %s Stream sequence: %s Last Ack: %s ago", f(state.AckFloor.Consumer), f(state.AckFloor.Stream), f(sinceRefOrNow(state.TimeStamp, *state.AckFloor.Last)))
+			cols.AddRowf("Acknowledgment Floor", "Consumer sequence: %s Stream sequence: %s Last Ack: %s ago", f(state.AckFloor.Consumer), f(state.AckFloor.Stream), f(iu.SinceRefOrNow(state.TimeStamp, *state.AckFloor.Last)))
 		}
 		if config.MaxAckPending > 0 {
 			cols.AddRowf("Outstanding Acks", "%s out of maximum %s", f(state.NumAckPending), f(config.MaxAckPending))
