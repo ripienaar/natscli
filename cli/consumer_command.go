@@ -351,7 +351,7 @@ func configureConsumerCommand(app commandHost) {
 	conClusterBalance.Flag("invert", "Invert the check - before becomes after, with becomes without").BoolVar(&c.fInvert)
 	conClusterBalance.Flag("expression", "Balance matching consumers using an expression language").StringVar(&c.fExpression)
 
-	conClusterEvacuate := conCluster.Command("evacuate", "Removes a stream from a peer").Action(c.evacuatePeer)
+	conClusterEvacuate := conCluster.Command("evacuate", "Evacuates a consumer off a peer").Action(c.evacuatePeer)
 	conClusterEvacuate.Tag("scope:user", "impact:rw")
 	conClusterEvacuate.Arg("stream", "The stream to act on").StringVar(&c.stream)
 	conClusterEvacuate.Arg("consumer", "Consumer to act on").StringVar(&c.consumer)
