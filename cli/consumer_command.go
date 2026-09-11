@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -130,6 +131,7 @@ type consumerCmd struct {
 	apiLevel           int
 	resetSeq           uint64
 	resetSeqIsSet      bool
+	peerName           string
 }
 
 func configureConsumerCommand(app commandHost) {
@@ -348,10 +350,90 @@ func configureConsumerCommand(app commandHost) {
 	conClusterBalance.Flag("pinned", "Balance Pinned Client priority group consumers that are fully pinned").UnNegatableBoolVar(&c.fPinned)
 	conClusterBalance.Flag("invert", "Invert the check - before becomes after, with becomes without").BoolVar(&c.fInvert)
 	conClusterBalance.Flag("expression", "Balance matching consumers using an expression language").StringVar(&c.fExpression)
+
+	conClusterEvacuate := conCluster.Command("evacuate", "Removes a consumer from a peer").Action(c.evacuatePeer)
+	conClusterEvacuate.Tag("scope:user", "impact:rw")
+	conClusterEvacuate.Arg("stream", "The stream to act on").StringVar(&c.stream)
+	conClusterEvacuate.Arg("consumer", "The consumer to act on").StringVar(&c.consumer)
+	conClusterEvacuate.Arg("peer", "The name of the peer to remove").StringVar(&c.peerName)
+	conClusterEvacuate.Flag("force", "Force evacuation without prompt").Short('f').UnNegatableBoolVar(&c.force)
 }
 
 func init() {
 	registerCommand("consumer", 4, configureConsumerCommand)
+}
+
+func (c *consumerCmd) evacuatePeer(_ *fisk.ParseContext) error {
+	c.connectAndSetup(true, true)
+
+	info, err := c.selectedConsumer.State()
+	if err != nil {
+		return err
+	}
+
+	if info.Cluster == nil {
+		return fmt.Errorf("consumer %q is not clustered", info.Name)
+	}
+
+	peerNames := []string{info.Cluster.Leader}
+	for _, r := range info.Cluster.Replicas {
+		peerNames = append(peerNames, r.Name)
+	}
+
+	if c.peerName == "" {
+		err = iu.AskOne(&survey.Select{
+			Message: "Select a Peer",
+			Options: peerNames,
+		}, &c.peerName)
+		if err != nil {
+			return err
+		}
+	}
+
+	log.Printf("Evacuating consumer from peer %q", c.peerName)
+
+	if !c.force {
+		ok, err := askConfirmation(fmt.Sprintf("Really evacuate %q", c.peerName), false)
+		fisk.FatalIfError(err, "could not obtain confirmation")
+
+		if !ok {
+			return nil
+		}
+	}
+
+	err = c.selectedConsumer.EvacuatePeer(c.peerName)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Requested evacuation of peer %q", c.peerName)
+
+	log.Printf("Waiting up to 1 minute for peer state to change")
+	fmt.Println()
+	ticker := time.NewTicker(1 * time.Second)
+	to := time.NewTimer(time.Minute)
+	for {
+		select {
+		case <-ticker.C:
+			nfo, err := c.selectedConsumer.State()
+			if err == nil {
+				peers := []string{nfo.Cluster.Leader}
+				for _, p := range nfo.Cluster.Replicas {
+					peers = append(peers, p.Name)
+				}
+
+				if !slices.Contains(peers, c.peerName) {
+					fmt.Println()
+					fmt.Println()
+					fmt.Printf("Consumer peers are now: %s\n", strings.Join(peers, ", "))
+					return nil
+				}
+				fmt.Print(".")
+			}
+		case <-to.C:
+			return fmt.Errorf("consumer failed to evacuate %q, review stream state using 'nats consumer info'", c.peerName)
+		}
+	}
 }
 
 func (c *consumerCmd) resetAction(_ *fisk.ParseContext) error {
